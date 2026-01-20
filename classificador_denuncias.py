@@ -4,29 +4,41 @@ import os
 import unicodedata
 import streamlit as st
 import google.generativeai as genai
-import pandas as pd
-from datetime import datetime
-from streamlit_gsheets import GSheetsConnection
+from typing import Dict, Optional
 
 class ClassificadorDenuncias:
     def __init__(self):
         api_key = st.secrets.get("GOOGLE_API_KEY")
+        if not api_key:
+            st.error("❌ GOOGLE_API_KEY não configurada nos Secrets.")
+            st.stop()
+
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # AJUSTE: Adicionada configuração de temperatura para maior precisão
+        self.model_name = 'models/gemini-flash-latest' 
+        self.model = genai.GenerativeModel(
+            model_name=self.model_name,
+            generation_config={
+                "temperature": 0.1,  # Baixa temperatura = respostas mais técnicas e menos criativas
+            }
+        )
         
         self.base_path = os.path.dirname(os.path.abspath(__file__))
         self.carregar_bases()
-        # Conexão direta com Google Sheets
-        self.conn = st.connection("gsheets", type=GSheetsConnection)
 
     def carregar_bases(self):
-        with open(os.path.join(self.base_path, "base_temas_subtemas.json"), 'r', encoding='utf-8') as f:
-            self.temas_subtemas = json.load(f)
-        with open(os.path.join(self.base_path, "base_promotorias.json"), 'r', encoding='utf-8') as f:
-            self.base_promotorias = json.load(f)
-        
+        try:
+            with open(os.path.join(self.base_path, "base_temas_subtemas.json"), 'r', encoding='utf-8') as f:
+                self.temas_subtemas = json.load(f)
+            with open(os.path.join(self.base_path, "base_promotorias.json"), 'r', encoding='utf-8') as f:
+                self.base_promotorias = json.load(f)
+        except Exception as e:
+            st.error(f"❌ Erro nas bases JSON: {e}")
+            st.stop()
+            
         self.municipio_para_promotoria = {
-            m.upper(): {"promotoria": d["promotoria"], "municipio_oficial": m}
+            m.upper(): {"promotoria": d["promotoria"], "email": d["email"], "telefone": d["telefone"], "municipio_oficial": m}
             for nucleo, d in self.base_promotorias.items() for m in d["municipios"]
         }
 
@@ -34,58 +46,63 @@ class ClassificadorDenuncias:
         if not texto: return ""
         return "".join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
 
-    def salvar_online(self, dados: dict):
-        """Adiciona os dados diretamente na planilha do link"""
-        try:
-            url = st.secrets.get("GSHEET_URL")
-            # Lê a planilha atual
-            df_atual = self.conn.read(spreadsheet=url)
-            # Cria a nova linha
-            nova_linha = pd.DataFrame([dados])
-            # Concatena e faz o update total
-            df_final = pd.concat([df_atual, nova_linha], ignore_index=True)
-            self.conn.update(spreadsheet=url, data=df_final)
-            return True
-        except Exception as e:
-            st.error(f"Erro ao sincronizar com o Excel Online: {e}")
-            return False
-
-    def processar_denuncia(self, endereco, denuncia, num_com, num_mprj, vencedor, responsavel):
-        # Identificação de Local
-        municipio_nome = "Não identificado"
-        promotoria = "Não identificada"
+    def processar_denuncia(self, endereco: str, denuncia: str, num_comunicacao: str = "", num_mprj: str = "") -> Dict:
+        municipio_nome = None
         end_upper = self.remover_acentos(endereco.upper())
-        for m_chave, info in self.municipio_para_promotoria.items():
+        for m_chave in self.municipio_para_promotoria.keys():
             if self.remover_acentos(m_chave) in end_upper:
-                municipio_nome = info["municipio_oficial"]
-                promotoria = info["promotoria"]
+                municipio_nome = self.municipio_para_promotoria[m_chave]["municipio_oficial"]
                 break
-
-        # IA
-        catalogo = json.dumps(self.temas_subtemas, ensure_ascii=False)
-        prompt = f"Classifique: {denuncia}. Use o catálogo: {catalogo}. Retorne JSON: tema, subtema, empresa, resumo (10 palavras)."
         
+        prom_info = self.municipio_para_promotoria.get(
+            municipio_nome.upper() if municipio_nome else "", 
+            {"promotoria": "Promotoria não identificada", "email": "N/A", "telefone": "N/A", "municipio_oficial": municipio_nome or "Não identificado"}
+        )
+
+        # AJUSTE: Criando um catálogo detalhado para o prompt
+        catalogo_txt = ""
+        for tema, subtemas in self.temas_subtemas.items():
+            catalogo_txt += f"- TEMA: {tema} | SUBTEMAS: {', '.join(subtemas)}\n"
+        
+        # AJUSTE: Prompt agora inclui subtemas e regra de resumo curto
+        prompt = f"""Responda APENAS com um objeto JSON puro.
+        Analise a denúncia: "{denuncia}"
+        
+        CATÁLOGO OFICIAL DE TEMAS E SUBTEMAS:
+        {catalogo_txt}
+        
+        REGRAS DE CLASSIFICAÇÃO:
+        1. Escolha um TEMA e um SUBTEMA que pertençam estritamente ao catálogo acima.
+        2. O campo 'resumo' deve ter NO MÁXIMO 10 PALAVRAS. Seja direto.
+        3. Identifique a empresa citada ou use "Não identificada".
+        
+        JSON esperado:
+        {{"tema": "...", "subtema": "...", "empresa": "...", "resumo": "..."}}"""
+
         try:
-            res = self.model.generate_content(prompt)
-            txt = res.text.replace('```json', '').replace('```', '').strip()
-            dados_ia = json.loads(txt)
-        except:
-            dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "Não identificada", "resumo": "Processado manualmente"}
+            response = self.model.generate_content(prompt)
+            
+            res_text = response.text.strip()
+            # Limpeza de Markdown
+            if "```json" in res_text:
+                res_text = res_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in res_text:
+                res_text = res_text.split("```")[1].split("```")[0].strip()
+            
+            dados_ia = json.loads(res_text)
+        except Exception as e:
+            st.error(f"Erro na análise: {e}")
+            dados_ia = {"tema": "Serviços", "subtema": "Erro técnico", "empresa": "Não identificada", "resumo": "Falha no processamento."}
 
-        resultado = {
-            "Nº Comunicação": num_com,
-            "Nº MPRJ": num_mprj,
-            "Promotoria": promotoria,
-            "Município": municipio_nome,
-            "Data": datetime.now().strftime("%d/%m/%Y %H:%M"),
-            "Denúncia": denuncia,
-            "Resumo": dados_ia.get("resumo"),
-            "Tema": dados_ia.get("tema"),
-            "Subtema": dados_ia.get("subtema"),
-            "Empresa": str(dados_ia.get("empresa")).title(),
-            "É Consumidor Vencedor?": vencedor,
-            "Enviado por:": responsavel
+        return {
+            "num_comunicacao": num_comunicacao, "num_mprj": num_mprj,
+            "endereco": endereco, "denuncia": denuncia,
+            "municipio": prom_info["municipio_oficial"],
+            "promotoria": prom_info["promotoria"],
+            "email": prom_info["email"],
+            "telefone": prom_info["telefone"],
+            "tema": dados_ia.get("tema", "Serviços"),
+            "subtema": dados_ia.get("subtema", "Não identificado"),
+            "empresa": dados_ia.get("empresa", "Não identificada"),
+            "resumo": dados_ia.get("resumo", "Resumo indisponível")
         }
-        
-        self.salvar_online(resultado)
-        return resultado
