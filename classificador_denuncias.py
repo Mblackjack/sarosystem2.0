@@ -12,7 +12,7 @@ class ClassificadorDenuncias:
         # IA Config
         api_key = st.secrets.get("GOOGLE_API_KEY")
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
+        self.model = genai.GenerativeModel('gemini-flash-latest')
         
         # URL da Planilha Viva (Webhook)
         self.webhook_url = st.secrets.get("GSHEET_WEBHOOK")
