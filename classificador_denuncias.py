@@ -14,8 +14,8 @@ class ClassificadorDenuncias:
         self.model = genai.GenerativeModel('gemini-1.5-flash')
         
         self.base_path = os.path.dirname(os.path.abspath(__file__))
-        # Nome do arquivo Excel que será gerado/atualizado
-        self.caminho_excel = os.path.join(self.base_path, "Ouvidorias_SARO_Oficial.xlsx")
+        # Nome oficial do arquivo que será criado no servidor
+        self.caminho_excel = os.path.join(self.base_path, "Registro_Ouvidorias_SARO.xlsx")
         self.carregar_bases()
 
     def carregar_bases(self):
@@ -34,7 +34,7 @@ class ClassificadorDenuncias:
         return "".join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
 
     def salvar_no_excel(self, dados: dict):
-        """Salva a nova linha no arquivo Excel local"""
+        """Abre o Excel, adiciona a linha e salva no servidor"""
         try:
             df_novo = pd.DataFrame([dados])
             
@@ -44,11 +44,10 @@ class ClassificadorDenuncias:
             else:
                 df_final = df_novo
             
-            # Salva o arquivo Excel
             df_final.to_excel(self.caminho_excel, index=False)
             return True
         except Exception as e:
-            st.error(f"Erro ao salvar arquivo Excel: {e}")
+            st.error(f"Erro ao manipular arquivo Excel: {e}")
             return False
 
     def processar_denuncia(self, endereco, denuncia, num_com, num_mprj, vencedor, responsavel):
@@ -69,7 +68,7 @@ class ClassificadorDenuncias:
             txt = res.text.replace('```json', '').replace('```', '').strip()
             dados_ia = json.loads(txt)
         except:
-            dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "Não identificada", "resumo": "Verificar descrição"}
+            dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "Não identificada", "resumo": "Processamento manual necessário"}
 
         resultado = {
             "Nº Comunicação": num_com,
@@ -78,10 +77,10 @@ class ClassificadorDenuncias:
             "Município": municipio_nome,
             "Data": datetime.now().strftime("%d/%m/%Y %H:%M"),
             "Denúncia": denuncia,
-            "Resumo": dados_ia.get("resumo"),
-            "Tema": dados_ia.get("tema"),
-            "Subtema": dados_ia.get("subtema"),
-            "Empresa": str(dados_ia.get("empresa")).title(),
+            "Resumo": dados_ia.get("resumo", ""),
+            "Tema": dados_ia.get("tema", "Outros"),
+            "Subtema": dados_ia.get("subtema", "Geral"),
+            "Empresa": str(dados_ia.get("empresa", "Não identificada")).strip().title(),
             "É Consumidor Vencedor?": vencedor,
             "Enviado por:": responsavel
         }
