@@ -1,20 +1,24 @@
 # -*- coding: utf-8 -*-
 import json
+import requests
 import os
 import unicodedata
 import streamlit as st
 import google.generativeai as genai
-import pandas as pd
 from datetime import datetime
 
 class ClassificadorDenuncias:
     def __init__(self):
+        # IA Config
         api_key = st.secrets.get("GOOGLE_API_KEY")
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-1.5-flash')
         
+        # URL da Planilha Viva (Webhook)
+        self.webhook_url = st.secrets.get("GSHEET_WEBHOOK")
+        
+        # Bases locais
         self.base_path = os.path.dirname(os.path.abspath(__file__))
-        self.caminho_excel = os.path.join(self.base_path, "Registro_Ouvidorias_SARO.xlsx")
         self.carregar_bases()
 
     def carregar_bases(self):
@@ -22,33 +26,16 @@ class ClassificadorDenuncias:
             self.temas_subtemas = json.load(f)
         with open(os.path.join(self.base_path, "base_promotorias.json"), 'r', encoding='utf-8') as f:
             self.base_promotorias = json.load(f)
-        
         self.municipio_para_promotoria = {
             m.upper(): {"promotoria": d["promotoria"], "municipio_oficial": m}
             for nucleo, d in self.base_promotorias.items() for m in d["municipios"]
         }
 
     def remover_acentos(self, texto: str) -> str:
-        if not texto: return ""
         return "".join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
 
-    def salvar_no_excel(self, dados: dict):
-        """Atualiza o arquivo Excel no servidor"""
-        try:
-            df_novo = pd.DataFrame([dados])
-            if os.path.exists(self.caminho_excel):
-                df_antigo = pd.read_excel(self.caminho_excel)
-                df_final = pd.concat([df_antigo, df_novo], ignore_index=True)
-            else:
-                df_final = df_novo
-            df_final.to_excel(self.caminho_excel, index=False)
-            return True
-        except Exception as e:
-            st.error(f"Erro ao salvar Excel: {e}")
-            return False
-
     def processar_denuncia(self, endereco, denuncia, num_com, num_mprj, vencedor, responsavel):
-        # Localização
+        # 1. Identificar Município/Promotoria
         municipio_nome = "Não identificado"
         promotoria = "Não identificada"
         end_upper = self.remover_acentos(endereco.upper())
@@ -58,29 +45,39 @@ class ClassificadorDenuncias:
                 promotoria = info["promotoria"]
                 break
 
-        # Prompt de IA Robusto
+        # 2. Classificação IA
         catalogo = json.dumps(self.temas_subtemas, ensure_ascii=False)
-        prompt = (
-            f"Analise a denúncia: '{denuncia}'.\n"
-            f"Use este catálogo: {catalogo}.\n"
-            "Retorne APENAS um JSON com: 'tema', 'subtema', 'empresa', 'resumo'.\n"
-            "O resumo deve ter no máximo 10 palavras. Se não identificar a empresa, use 'Desconhecida'."
-        )
+        prompt = (f"Analise: {denuncia}. Use este catálogo: {catalogo}. "
+                  "Retorne APENAS um JSON com chaves: tema, subtema, empresa, resumo (máx 10 palavras).")
         
         try:
             res = self.model.generate_content(prompt)
-            txt = res.text.replace('```json', '').replace('```', '').strip()
-            dados_ia = json.loads(txt)
+            txt_limpo = res.text.replace('```json', '').replace('```', '').strip()
+            dados_ia = json.loads(txt_limpo)
         except:
-            dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "Não identificada", "resumo": "Erro de processamento"}
+            dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "Não identificada", "resumo": "Processamento manual"}
 
-        resultado = {
-            "Nº Comunicação": num_com, "Nº MPRJ": num_mprj, "Promotoria": promotoria,
-            "Município": municipio_nome, "Data": datetime.now().strftime("%d/%m/%Y %H:%M"),
-            "Denúncia": denuncia, "Resumo": dados_ia.get("resumo"), "Tema": dados_ia.get("tema"),
-            "Subtema": dados_ia.get("subtema"), "Empresa": str(dados_ia.get("empresa")).title(),
-            "É Consumidor Vencedor?": vencedor, "Enviado por:": responsavel
+        # 3. Montar dados para o Google Script
+        dados_final = {
+            "num_com": num_com,
+            "num_mprj": num_mprj,
+            "promotoria": promotoria,
+            "municipio": municipio_nome,
+            "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
+            "denuncia": denuncia,
+            "resumo": dados_ia.get("resumo"),
+            "tema": dados_ia.get("tema"),
+            "subtema": dados_ia.get("subtema"),
+            "empresa": str(dados_ia.get("empresa")).title(),
+            "vencedor": vencedor,
+            "responsavel": responsavel
         }
+
+        # 4. ENVIO PARA A PLANILHA VIVA
+        if self.webhook_url:
+            try:
+                requests.post(self.webhook_url, json=dados_final, timeout=10)
+            except Exception as e:
+                st.error(f"Erro ao enviar para a planilha: {e}")
         
-        self.salvar_no_excel(resultado)
-        return resultado
+        return dados_final
