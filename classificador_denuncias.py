@@ -14,7 +14,6 @@ class ClassificadorDenuncias:
         self.model = genai.GenerativeModel('gemini-1.5-flash')
         
         self.base_path = os.path.dirname(os.path.abspath(__file__))
-        # Nome oficial do arquivo que será criado no servidor
         self.caminho_excel = os.path.join(self.base_path, "Registro_Ouvidorias_SARO.xlsx")
         self.carregar_bases()
 
@@ -34,23 +33,22 @@ class ClassificadorDenuncias:
         return "".join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
 
     def salvar_no_excel(self, dados: dict):
-        """Abre o Excel, adiciona a linha e salva no servidor"""
+        """Atualiza o arquivo Excel no servidor"""
         try:
             df_novo = pd.DataFrame([dados])
-            
             if os.path.exists(self.caminho_excel):
                 df_antigo = pd.read_excel(self.caminho_excel)
                 df_final = pd.concat([df_antigo, df_novo], ignore_index=True)
             else:
                 df_final = df_novo
-            
             df_final.to_excel(self.caminho_excel, index=False)
             return True
         except Exception as e:
-            st.error(f"Erro ao manipular arquivo Excel: {e}")
+            st.error(f"Erro ao salvar Excel: {e}")
             return False
 
     def processar_denuncia(self, endereco, denuncia, num_com, num_mprj, vencedor, responsavel):
+        # Localização
         municipio_nome = "Não identificado"
         promotoria = "Não identificada"
         end_upper = self.remover_acentos(endereco.upper())
@@ -60,29 +58,28 @@ class ClassificadorDenuncias:
                 promotoria = info["promotoria"]
                 break
 
+        # Prompt de IA Robusto
         catalogo = json.dumps(self.temas_subtemas, ensure_ascii=False)
-        prompt = f"Analise em JSON: {denuncia}. Use o catálogo: {catalogo}. Retorne: tema, subtema, empresa, resumo (máx 10 palavras)."
+        prompt = (
+            f"Analise a denúncia: '{denuncia}'.\n"
+            f"Use este catálogo: {catalogo}.\n"
+            "Retorne APENAS um JSON com: 'tema', 'subtema', 'empresa', 'resumo'.\n"
+            "O resumo deve ter no máximo 10 palavras. Se não identificar a empresa, use 'Desconhecida'."
+        )
         
         try:
             res = self.model.generate_content(prompt)
             txt = res.text.replace('```json', '').replace('```', '').strip()
             dados_ia = json.loads(txt)
         except:
-            dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "Não identificada", "resumo": "Processamento manual necessário"}
+            dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "Não identificada", "resumo": "Erro de processamento"}
 
         resultado = {
-            "Nº Comunicação": num_com,
-            "Nº MPRJ": num_mprj,
-            "Promotoria": promotoria,
-            "Município": municipio_nome,
-            "Data": datetime.now().strftime("%d/%m/%Y %H:%M"),
-            "Denúncia": denuncia,
-            "Resumo": dados_ia.get("resumo", ""),
-            "Tema": dados_ia.get("tema", "Outros"),
-            "Subtema": dados_ia.get("subtema", "Geral"),
-            "Empresa": str(dados_ia.get("empresa", "Não identificada")).strip().title(),
-            "É Consumidor Vencedor?": vencedor,
-            "Enviado por:": responsavel
+            "Nº Comunicação": num_com, "Nº MPRJ": num_mprj, "Promotoria": promotoria,
+            "Município": municipio_nome, "Data": datetime.now().strftime("%d/%m/%Y %H:%M"),
+            "Denúncia": denuncia, "Resumo": dados_ia.get("resumo"), "Tema": dados_ia.get("tema"),
+            "Subtema": dados_ia.get("subtema"), "Empresa": str(dados_ia.get("empresa")).title(),
+            "É Consumidor Vencedor?": vencedor, "Enviado por:": responsavel
         }
         
         self.salvar_no_excel(resultado)
