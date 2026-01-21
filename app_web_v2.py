@@ -4,106 +4,118 @@ from classificador_denuncias import ClassificadorDenuncias
 
 st.set_page_config(page_title="SARO - MPRJ", layout="wide", page_icon="⚖️")
 
-# Estilo Institucional MPRJ
+# Estilo CSS para replicar o visual da versão anterior
 st.markdown("""
 <style>
-    .resumo-box { background-color: #f0f2f6; padding: 15px; border-radius: 8px; border-left: 5px solid #960018; }
+    .caixa-resultado {
+        border: 1px solid #960018;
+        padding: 20px;
+        border-radius: 10px;
+        background-color: #ffffff;
+        margin-bottom: 20px;
+    }
+    .label-vermelho { color: #960018; font-weight: bold; }
     .titulo-custom { color: #960018; font-weight: bold; font-size: 1.5rem; }
+    .badge-verde {
+        background-color: #e8f5e9;
+        color: #2e7d32;
+        padding: 10px 20px;
+        border-radius: 8px;
+        font-weight: bold;
+        display: inline-block;
+        margin-right: 10px;
+        border: 1px solid #c8e6c9;
+    }
+    .resumo-box { background-color: #f0f2f6; padding: 15px; border-radius: 8px; border-left: 5px solid #960018; }
     .area-planilha { border: 2px solid #960018; padding: 25px; text-align: center; border-radius: 10px; background-color: #ffffff; margin-top: 20px; }
     div.stButton > button:first-child { background-color: #960018 !important; color: white !important; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
-# Inicialização da lógica
 if "resultado" not in st.session_state:
     st.session_state.resultado = None
 
-# Tenta carregar o classificador
 try:
     classificador = ClassificadorDenuncias()
 except Exception as e:
-    st.error(f"Erro ao iniciar sistema. Verifique os Secrets. Detalhe: {e}")
+    st.error(f"Erro ao iniciar sistema: {e}")
     st.stop()
 
-# --- BARRA LATERAL (SIDEBAR) ---
 st.sidebar.image("https://www.mprj.mp.br/mprj-theme/images/mprj/logo_mprj.png", width=180)
-st.sidebar.divider()
-st.sidebar.info("SARO v2.0 - Sistema de Ouvidorias")
-st.sidebar.caption("Integrado com Planilha Viva")
-
-# --- TÍTULO PRINCIPAL ---
 st.title("⚖️ Sistema SARO - MPRJ")
 st.divider()
 
-# --- TÓPICO 1: NOVO REGISTRO DE OUVIDORIA ---
+# --- FORMULÁRIO DE REGISTRO ---
 with st.form("form_reg", clear_on_submit=True):
     st.markdown('<p class="titulo-custom">📝 Novo Registro de Ouvidoria</p>', unsafe_allow_html=True)
     
-    c1, c2 = st.columns(2)
-    with c1:
-        num_com = st.text_input("Nº de Comunicação", placeholder="Ex: 001/2025")
-    with c2:
-        num_mprj = st.text_input("Nº MPRJ", placeholder="Ex: 2025.0001.0002")
-        
-    endereco = st.text_input("Endereço Completo (Município é essencial para identificar a Promotoria)")
+    col1, col2 = st.columns(2)
+    num_com = col1.text_input("Nº de Comunicação")
+    num_mprj = col2.text_input("Nº MPRJ")
+    
+    endereco = st.text_input("Endereço Completo")
     denuncia = st.text_area("Descrição da Ouvidoria", height=150)
     
     f1, f2 = st.columns(2)
-    with f1:
-        responsavel = st.radio("Responsável pelo Registro:", ["Elias", "Matheus", "Ana Beatriz", "Sônia", "Priscila"], horizontal=True)
-    with f2:
-        vencedor = st.radio("O consumidor é vencedor?", ["Sim", "Não"], horizontal=True)
+    responsavel = f1.radio("Responsável:", ["Elias", "Matheus", "Ana Beatriz", "Sônia", "Priscila"], horizontal=True)
+    vencedor = f2.radio("Consumidor vencedor?", ["Sim", "Não"], horizontal=True)
     
-    submit_button = st.form_submit_button("REGISTRAR NA PLANILHA VIVA", use_container_width=True)
+    if st.form_submit_button("REGISTRAR NA PLANILHA VIVA", use_container_width=True):
+        if endereco and denuncia:
+            with st.spinner("Processando..."):
+                res = classificador.processar_denuncia(endereco, denuncia, num_com, num_mprj, vencedor, responsavel)
+                st.session_state.resultado = res
+                st.success("✅ Enviado para a Planilha Viva!")
+        else:
+            st.error("Preencha Endereço e Descrição.")
 
-# Processamento do formulário
-if submit_button:
-    if endereco and denuncia:
-        with st.spinner("Classificando via IA e sincronizando com a planilha..."):
-            # Envia os dados para o classificador que agora usa o Webhook (URL /exec)
-            res = classificador.processar_denuncia(endereco, denuncia, num_com, num_mprj, vencedor, responsavel)
-            st.session_state.resultado = res
-            st.success("✅ Sucesso! O registro foi enviado para a Planilha Viva.")
-    else:
-        st.error("Por favor, preencha os campos obrigatórios (Endereço e Denúncia).")
-
-# --- TÓPICO 2: REGISTRO DA CLASSIFICAÇÃO ATUAL ---
+# --- TÓPICO: REGISTRO DA CLASSIFICAÇÃO ATUAL (VERSÃO ANTERIOR) ---
 if st.session_state.resultado:
     res = st.session_state.resultado
     st.divider()
-    st.markdown('<p class="titulo-custom">✅ Registro da Classificação Atual</p>', unsafe_allow_html=True)
+    st.markdown("### ✅ Resultado da Classificação Atual")
     
-    col_a, col_b, col_c = st.columns(3)
-    col_a.metric("Empresa/Órgão", res["empresa"])
-    col_b.metric("Tema", res["tema"])
-    col_c.metric("Município", res["municipio"])
+    # Box com informações principais
+    st.markdown(f"""
+    <div class="caixa-resultado">
+        <div style="display: flex; justify-content: space-between;">
+            <p><span class="label-vermelho">Nº Comunicação:</span> {res['num_com']}</p>
+            <p><span class="label-vermelho">Nº MPRJ:</span> {res['num_mprj']}</p>
+        </div>
+        <p>📍 <span class="label-vermelho">Município:</span> {res['municipio']}</p>
+        <p>🏛️ <span class="label-vermelho">Promotoria Responsável:</span> {res['promotoria']}</p>
+    </div>
+    """, unsafe_allow_html=True)
     
-    st.write(f"**🏛️ Promotoria Responsável:** {res['promotoria']}")
-    st.markdown(f"**Resumo da IA (Máximo 10 palavras):**")
+    # Badges de Tema, Subtema e Empresa
+    col_t1, col_t2, col_t3 = st.columns(3)
+    col_t1.markdown(f'<div class="badge-verde">Tema: {res["tema"]}</div>', unsafe_allow_html=True)
+    col_t2.markdown(f'<div class="badge-verde">Subtema: {res["subtema"]}</div>', unsafe_allow_html=True)
+    col_t3.markdown(f'<div class="badge-verde">Empresa: {res["empresa"]}</div>', unsafe_allow_html=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("**Resumo da IA (Máximo 10 palavras):**")
     st.markdown(f'<div class="resumo-box">{res["resumo"]}</div>', unsafe_allow_html=True)
     
-    if st.button("➕ Novo Registro"):
+    # Expander com a descrição original
+    with st.expander("📄 Ver Descrição da Ouvidoria"):
+        st.write(res['denuncia'])
+    
+    if st.button("Limpar Tela para Novo Registro"):
         st.session_state.resultado = None
         st.rerun()
 
 st.divider()
 
-# --- TÓPICO 3: REGISTRO DE OUVIDORIAS (ÁREA DO LINK) ---
+# --- TÓPICO: REGISTRO DE OUVIDORIAS (LINK) ---
 st.markdown('<p class="titulo-custom">📊 Registro de Ouvidorias</p>', unsafe_allow_html=True)
-
-# URL da sua planilha real
 url_planilha = "https://docs.google.com/spreadsheets/d/1RqvTGIawKh9Kdj8e-9BFPpi33xkNeA33ItKAaUC40xc/edit"
 
 st.markdown(f"""
 <div class="area-planilha">
-    <p style="font-size: 1.1rem; color: #333;">Acesse a planilha oficial que recebe os dados em tempo real:</p>
-    <a href="{url_planilha}" target="_blank" style="text-decoration: none;">
-        <span style="font-size: 1.3rem; color: #960018; font-weight: bold; border-bottom: 2px solid #960018;">
-            📂 ABRIR PLANILHA DE REGISTROS (GOOGLE DRIVE)
-        </span>
+    <p>Acesse a planilha oficial atualizada em tempo real:</p>
+    <a href="{url_planilha}" target="_blank" style="font-weight: bold; color: #960018; font-size: 1.2rem;">
+        📂 ABRIR PLANILHA DE REGISTROS (GOOGLE DRIVE)
     </a>
-    <p style="margin-top: 15px; font-size: 0.9rem; color: #666;">(As atualizações aparecem instantaneamente após cada registro)</p>
 </div>
 """, unsafe_allow_html=True)
-
-st.caption("SARO v2.0 | Desenvolvido para o MPRJ")
