@@ -121,4 +121,6 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+st.divider()
+
 st.caption("SARO v2.0 - Sistema Automático de Registro de Ouvidorias | Ministério Público do Rio de Janeiro (Created by Matheus Pereira Barreto [62006659])")
