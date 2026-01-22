@@ -61,12 +61,12 @@ with st.form("form_reg", clear_on_submit=True):
     responsavel = f1.radio("Responsável:", ["Elias", "Matheus", "Ana Beatriz", "Sônia", "Priscila"], horizontal=True)
     vencedor = f2.radio("Consumidor vencedor?", ["Sim", "Não"], horizontal=True)
     
-    if st.form_submit_button("REGISTRAR NA PLANILHA VIVA", use_container_width=True):
+    if st.form_submit_button("🔍Registrar Ouvidoria", use_container_width=True):
         if endereco and denuncia:
             with st.spinner("Processando..."):
                 res = classificador.processar_denuncia(endereco, denuncia, num_com, num_mprj, vencedor, responsavel)
                 st.session_state.resultado = res
-                st.success("✅ Enviado para a Planilha Viva!")
+                st.success("✅ Enviado para o Arquivo de Ouvidorias!")
         else:
             st.error("Preencha Endereço e Descrição.")
 
@@ -116,7 +116,7 @@ st.markdown(f"""
 <div class="area-planilha">
     <p>Acesse a planilha oficial atualizada em tempo real:</p>
     <a href="{url_planilha}" target="_blank" style="font-weight: bold; color: #960018; font-size: 1.2rem;">
-        📂 ABRIR PLANILHA DE REGISTROS (GOOGLE DRIVE)
+        📂 Abrir Planilha de Ouvidorias
     </a>
 </div>
 """, unsafe_allow_html=True)
