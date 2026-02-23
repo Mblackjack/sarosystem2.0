@@ -13,14 +13,13 @@ class ClassificadorDenuncias:
         self.base_path = os.path.dirname(os.path.abspath(__file__))
         self.db_path = os.path.join(self.base_path, "saro_database.db")
         
-        # 2. Configuração ÚNICA: Gemini Flash Latest
+        # 2. Configuração Gemini Flash Latest
         api_key = st.secrets.get("GOOGLE_API_KEY")
         if not api_key:
             st.error("❌ Erro: GOOGLE_API_KEY não encontrada nos Secrets.")
             st.stop()
             
         genai.configure(api_key=api_key)
-        # Modelo configurado exatamente como solicitado
         self.model = genai.GenerativeModel('gemini-1.5-flash-latest')
         
         self.carregar_bases()
@@ -70,7 +69,7 @@ class ClassificadorDenuncias:
             return False
 
     def processar_denuncia(self, endereco, denuncia, num_com, num_mprj, vencedor, responsavel):
-        # 1. Localidade (Busca interna)
+        # 1. Identificar Município e Promotoria (Busca Interna)
         municipio_nome = "Não identificado"
         promotoria = "Não identificada"
         end_upper = self.remover_acentos(endereco.upper())
@@ -80,17 +79,20 @@ class ClassificadorDenuncias:
                 promotoria = info["promotoria"]
                 break
 
-        # 2. Extração e Classificação via IA
+        # 2. IA para Classificação da Denúncia E Extração do Endereço (Tudo em um passo)
         catalogo = json.dumps(self.temas_subtemas, ensure_ascii=False)
+        
         prompt = (
-            f"Analise os dados abaixo para o MPRJ.\n"
-            f"Endereço: {endereco}\n"
-            f"Denúncia: {denuncia}\n\n"
-            f"Use este catálogo: {catalogo}\n\n"
-            f"Retorne um JSON estrito com:\n"
-            f"'tema', 'subtema', 'empresa', 'resumo_base' (máx 10 palavras), "
-            f"'rua' (extraída do endereço), 'bairro' (extraído do endereço).\n"
-            f"Se não encontrar rua ou bairro, use 'Não informado'."
+            f"Você é um assistente do Ministério Público. Analise os inputs abaixo:\n\n"
+            f"INPUT ENDEREÇO: {endereco}\n"
+            f"INPUT DENÚNCIA: {denuncia}\n\n"
+            f"TAREFAS:\n"
+            f"1. Extraia a RUA e o BAIRRO exclusivamente do 'INPUT ENDEREÇO'.\n"
+            f"2. Classifique a denúncia usando este catálogo: {catalogo}\n\n"
+            f"Retorne APENAS um JSON com:\n"
+            f"'tema', 'subtema', 'empresa', 'resumo_ia' (máx 10 palavras),\n"
+            f"'rua_extraida' (se não houver rua no input endereço, use 'Rua não informada'),\n"
+            f"'bairro_extraido' (se não houver bairro no input endereço, use 'Bairro não informado')."
         )
         
         try:
@@ -100,20 +102,22 @@ class ClassificadorDenuncias:
             )
             dados_ia = json.loads(response.text)
             
-            # Formatação do Resumo: "Resumo Base. Rua: X/Bairro: Y"
-            res_base = dados_ia.get("resumo_base", "").strip()
-            if not res_base.endswith('.'):
-                res_base += '.'
+            # Formatação do Resumo Final conforme solicitado:
+            # "Resumo. Rua: X/Bairro: Y"
+            res_ia = dados_ia.get("resumo_ia", "").strip()
+            if not res_ia.endswith('.'):
+                res_ia += '.'
             
-            rua = dados_ia.get("rua", "Não informada")
-            bairro = dados_ia.get("bairro", "Não informado")
-            resumo_final = f"{res_base} Rua: {rua}/Bairro: {bairro}"
+            rua = dados_ia.get("rua_extraida", "Rua não informada")
+            bairro = dados_ia.get("bairro_extraido", "Bairro não informado")
             
-        except:
+            resumo_final = f"{res_ia} Rua: {rua}/Bairro: {bairro}"
+            
+        except Exception as e:
             dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "N/D"}
-            resumo_final = "Erro no processamento da IA."
+            resumo_final = "Erro ao processar resumo com a IA."
 
-        # 3. Pacote Final
+        # 3. Pacote Final de Dados
         dados_final = {
             "num_com": num_com, "num_mprj": num_mprj, "promotoria": promotoria,
             "municipio": municipio_nome, "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
@@ -123,6 +127,6 @@ class ClassificadorDenuncias:
             "vencedor": vencedor, "responsavel": responsavel
         }
 
-        # 4. Gravação no Banco de Dados da Aplicação
+        # 4. Salvar no Banco Interno
         sucesso = self.salvar_no_banco(dados_final)
         return dados_final, sucesso
