@@ -80,7 +80,6 @@ class ClassificadorDenuncias:
         # Tenta pegar a rua (primeira parte)
         if len(partes) >= 1:
             rua = partes[0]
-        
         # Tenta achar o bairro
         if len(partes) >= 2:
             # Se a última parte for estado (ex: RJ), tenta a anterior para o bairro
