@@ -10,10 +10,8 @@ from datetime import datetime
 class ClassificadorDenuncias:
     def __init__(self):
         try:
-            # Puxa a chave dos Secrets
             api_key = st.secrets["GOOGLE_API_KEY"]
             genai.configure(api_key=api_key)
-            # Usando a versão mais estável do flash
             self.model = genai.GenerativeModel('gemini-1.5-flash')
         except Exception as e:
             st.error(f"Erro na Chave da IA: {e}")
@@ -44,7 +42,6 @@ class ClassificadorDenuncias:
         return "".join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
 
     def processar_denuncia(self, endereco, denuncia, num_com, num_mprj, vencedor, responsavel):
-        # 1. Identificar Município
         municipio_nome = "Não identificado"
         promotoria = "Não identificada"
         end_upper = self.remover_acentos(endereco.upper())
@@ -55,23 +52,19 @@ class ClassificadorDenuncias:
                 promotoria = info["promotoria"]
                 break
 
-        # 2. IA - Prompt Rígido para evitar erro C
         catalogo = json.dumps(self.temas_subtemas, ensure_ascii=False)
         prompt = (f"Analise: {denuncia}. Use este catálogo: {catalogo}. "
                   "Responda APENAS um objeto JSON com: tema, subtema, empresa, resumo (máx 10 palavras).")
         
         try:
-            # Força o Gemini a responder JSON puro
             res = self.model.generate_content(
                 prompt, 
                 generation_config={"response_mime_type": "application/json"}
             )
             dados_ia = json.loads(res.text)
-        except Exception as e:
-            # Fallback caso a IA falhe
-            dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "Não identificada", "resumo": "Processamento manual."}
+        except:
+            dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "N/D", "resumo": "Processamento manual."}
 
-        # 3. Formatação dos Dados
         dados_final = {
             "num_com": str(num_com),
             "num_mprj": str(num_mprj),
@@ -87,12 +80,10 @@ class ClassificadorDenuncias:
             "responsavel": responsavel
         }
 
-        # 4. Envio para Planilha (Webhook)
         if self.webhook_url:
             try:
-                # Timeout curto para não travar o usuário
                 requests.post(self.webhook_url, json=dados_final, timeout=10)
             except:
-                st.warning("IA funcionou, mas a planilha está lenta. O registro será processado em breve.")
+                pass
         
         return dados_final
