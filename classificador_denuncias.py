@@ -9,18 +9,16 @@ from datetime import datetime
 
 class ClassificadorDenuncias:
     def __init__(self):
-        # IA Config - Buscando dos Secrets de forma segura
         try:
+            # Puxa a chave dos Secrets
             api_key = st.secrets["GOOGLE_API_KEY"]
             genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            # Usando a versão mais estável do flash
+            self.model = genai.GenerativeModel('gemini-1.5-flash')
         except Exception as e:
-            st.error(f"Erro ao configurar chave da IA: {e}")
+            st.error(f"Erro na Chave da IA: {e}")
         
-        # URL da Planilha Viva (Webhook para o Google Apps Script)
         self.webhook_url = st.secrets.get("GSHEET_WEBHOOK")
-        
-        # Bases locais com caminho absoluto para evitar erro 404
         self.base_path = os.path.dirname(os.path.abspath(__file__))
         self.carregar_bases()
 
@@ -39,14 +37,14 @@ class ClassificadorDenuncias:
                         "municipio_oficial": m
                     }
         except Exception as e:
-            st.error(f"Erro ao carregar bases JSON: {e}")
+            st.error(f"Erro bases JSON: {e}")
 
     def remover_acentos(self, texto: str) -> str:
         if not texto: return ""
         return "".join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
 
     def processar_denuncia(self, endereco, denuncia, num_com, num_mprj, vencedor, responsavel):
-        # 1. Identificar Município/Promotoria
+        # 1. Identificar Município
         municipio_nome = "Não identificado"
         promotoria = "Não identificada"
         end_upper = self.remover_acentos(endereco.upper())
@@ -57,27 +55,23 @@ class ClassificadorDenuncias:
                 promotoria = info["promotoria"]
                 break
 
-        # 2. Classificação IA - Refinado para ser mais robusto
+        # 2. IA - Prompt Rígido para evitar erro C
         catalogo = json.dumps(self.temas_subtemas, ensure_ascii=False)
-        prompt = (f"Analise esta denúncia: {denuncia}. Use este catálogo: {catalogo}. "
-                  "Responda EXCLUSIVAMENTE um JSON com as chaves: tema, subtema, empresa, resumo (máx 10 palavras).")
+        prompt = (f"Analise: {denuncia}. Use este catálogo: {catalogo}. "
+                  "Responda APENAS um objeto JSON com: tema, subtema, empresa, resumo (máx 10 palavras).")
         
         try:
-            # Uso do generation_config para garantir resposta em JSON
+            # Força o Gemini a responder JSON puro
             res = self.model.generate_content(
                 prompt, 
                 generation_config={"response_mime_type": "application/json"}
             )
             dados_ia = json.loads(res.text)
-        except:
-            dados_ia = {
-                "tema": "Outros", 
-                "subtema": "Geral", 
-                "empresa": "Não identificada", 
-                "resumo": "Processamento manual necessário."
-            }
+        except Exception as e:
+            # Fallback caso a IA falhe
+            dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "Não identificada", "resumo": "Processamento manual."}
 
-        # 3. Montar dados final
+        # 3. Formatação dos Dados
         dados_final = {
             "num_com": str(num_com),
             "num_mprj": str(num_mprj),
@@ -85,20 +79,20 @@ class ClassificadorDenuncias:
             "municipio": municipio_nome,
             "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
             "denuncia": denuncia,
-            "resumo": dados_ia.get("resumo"),
-            "tema": dados_ia.get("tema"),
-            "subtema": dados_ia.get("subtema"),
-            "empresa": str(dados_ia.get("empresa")).title(),
+            "resumo": dados_ia.get("resumo", "Sem resumo"),
+            "tema": dados_ia.get("tema", "Outros"),
+            "subtema": dados_ia.get("subtema", "Geral"),
+            "empresa": str(dados_ia.get("empresa", "N/D")).title(),
             "vencedor": vencedor,
             "responsavel": responsavel
         }
 
-        # 4. ENVIO PARA A PLANILHA VIVA (Google Apps Script)
+        # 4. Envio para Planilha (Webhook)
         if self.webhook_url:
             try:
-                # O Google Script às vezes demora, aumentamos o timeout para 15s
-                requests.post(self.webhook_url, json=dados_final, timeout=15)
-            except Exception as e:
-                st.warning(f"Atenção: A IA classificou, mas a planilha não respondeu a tempo. Erro: {e}")
+                # Timeout curto para não travar o usuário
+                requests.post(self.webhook_url, json=dados_final, timeout=10)
+            except:
+                st.warning("IA funcionou, mas a planilha está lenta. O registro será processado em breve.")
         
         return dados_final
