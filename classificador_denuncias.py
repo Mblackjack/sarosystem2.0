@@ -12,11 +12,11 @@ class ClassificadorDenuncias:
         self.base_path = os.path.dirname(os.path.abspath(__file__))
         self.db_path = os.path.join(self.base_path, "saro_database.db")
         
-        # Configuração do Gemini 1.5 Flash Latest
         try:
             api_key = st.secrets.get("GOOGLE_API_KEY")
             if api_key:
                 genai.configure(api_key=api_key)
+                # Modelo exato solicitado
                 self.model = genai.GenerativeModel('gemini-1.5-flash-latest')
             else:
                 st.error("Chave GOOGLE_API_KEY não encontrada nos Secrets.")
@@ -64,7 +64,6 @@ class ClassificadorDenuncias:
         return "".join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
 
     def processar_denuncia(self, endereco, denuncia, num_com, num_mprj, vencedor, responsavel):
-        # 1. Localidade (Busca interna por Município/Promotoria)
         municipio_nome = "Não identificado"
         promotoria = "Não identificada"
         end_upper = self.remover_acentos(endereco.upper())
@@ -74,36 +73,37 @@ class ClassificadorDenuncias:
                 promotoria = info["promotoria"]
                 break
 
-        # 2. IA para Classificação e Extração de Rua/Bairro do campo Endereço
         catalogo = json.dumps(self.temas_subtemas, ensure_ascii=False)
+        
+        # PROMPT REFORÇADO PARA EVITAR ERROS DE JSON
         prompt = (
-            f"Você é um assistente do MPRJ.\n\n"
-            f"ENDEREÇO FORNECIDO: {endereco}\n"
-            f"DENÚNCIA: {denuncia}\n\n"
-            f"TAREFAS:\n"
-            f"1. Extraia a RUA e o BAIRRO exclusivamente do 'ENDEREÇO FORNECIDO'.\n"
-            f"2. Classifique a denúncia conforme o catálogo: {catalogo}\n\n"
-            f"Responda APENAS um JSON com:\n"
-            f"'tema', 'subtema', 'empresa', 'resumo_curto' (máx 10 palavras),\n"
-            f"'rua_ext' (se não houver, 'Rua não informada'), 'bairro_ext' (se não houver, 'Bairro não informado')."
+            f"Você é um classificador de ouvidorias do MPRJ.\n"
+            f"DADOS:\n- Endereço: {endereco}\n- Denúncia: {denuncia}\n\n"
+            f"CATÁLOGO: {catalogo}\n\n"
+            f"REGRAS:\n"
+            f"1. Extraia Rua e Bairro apenas do Endereço acima.\n"
+            f"2. Resuma a denúncia em 10 palavras.\n"
+            f"3. Responda APENAS o JSON no formato:\n"
+            f'{{"tema": "...", "subtema": "...", "empresa": "...", "resumo_curto": "...", "rua": "...", "bairro": "..."}}'
         )
         
         try:
-            response = self.model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+            response = self.model.generate_content(
+                prompt, 
+                generation_config={"response_mime_type": "application/json"}
+            )
             dados_ia = json.loads(response.text)
             
-            # Formatação: "Resumo. Rua: X/Bairro: Y"
-            res_ia = dados_ia.get("resumo_curto", "").strip()
-            if not res_ia.endswith('.'): res_ia += '.'
+            res_base = dados_ia.get("resumo_curto", "Sem resumo").strip()
+            if not res_base.endswith('.'): res_base += '.'
             
-            rua = dados_ia.get("rua_ext", "Rua não informada")
-            bairro = dados_ia.get("bairro_ext", "Bairro não informado")
-            resumo_final = f"{res_ia} Rua: {rua}/Bairro: {bairro}"
-        except:
+            rua = dados_ia.get("rua", "Não informada")
+            bairro = dados_ia.get("bairro", "Não informado")
+            resumo_final = f"{res_base} Rua: {rua}/Bairro: {bairro}"
+        except Exception as e:
             dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "N/D"}
-            resumo_final = "IA temporariamente indisponível."
+            resumo_final = f"Erro na IA: {str(e)[:50]}... Rua: Não identificada/Bairro: Não identificado"
 
-        # 3. Montagem do Dicionário Final
         dados_final = {
             "num_com": str(num_com), "num_mprj": str(num_mprj), "promotoria": promotoria,
             "municipio": municipio_nome, "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
@@ -113,7 +113,6 @@ class ClassificadorDenuncias:
             "vencedor": vencedor, "responsavel": responsavel
         }
 
-        # 4. Salvar no Banco Interno (SQLite)
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
