@@ -1,129 +1,98 @@
 # -*- coding: utf-8 -*-
+import json
+import requests
+import os
+import unicodedata
 import streamlit as st
-from classificador_denuncias import ClassificadorDenuncias
+import google.generativeai as genai
+from datetime import datetime
 
-st.set_page_config(page_title="SARO - MPRJ", layout="wide", page_icon="⚖️")
+class ClassificadorDenuncias:
+    def __init__(self):
+        try:
+            # Puxa a chave dos Secrets
+            api_key = st.secrets["GOOGLE_API_KEY"]
+            genai.configure(api_key=api_key)
+            # Usando a versão mais estável do flash
+            self.model = genai.GenerativeModel('gemini-1.5-flash')
+        except Exception as e:
+            st.error(f"Erro na Chave da IA: {e}")
+        
+        self.webhook_url = st.secrets.get("GSHEET_WEBHOOK")
+        self.base_path = os.path.dirname(os.path.abspath(__file__))
+        self.carregar_bases()
 
-# Estilo CSS para replicar o visual da versão anterior
-st.markdown("""
-<style>
-    .caixa-resultado {
-        border: 1px solid #960018;
-        padding: 20px;
-        border-radius: 10px;
-        background-color: #ffffff;
-        margin-bottom: 20px;
-    }
-    .label-vermelho { color: #960018; font-weight: bold; }
-    .titulo-custom { color: #960018; font-weight: bold; font-size: 1.5rem; }
-    .badge-verde {
-        background-color: #e8f5e9;
-        color: #2e7d32;
-        padding: 10px 20px;
-        border-radius: 8px;
-        font-weight: bold;
-        display: inline-block;
-        margin-right: 10px;
-        border: 1px solid #c8e6c9;
-    }
-    .resumo-box { background-color: #f0f2f6; padding: 15px; border-radius: 8px; border-left: 5px solid #960018; }
-    .area-planilha { border: 2px solid #960018; padding: 25px; text-align: center; border-radius: 10px; background-color: #ffffff; margin-top: 20px; }
-    div.stButton > button:first-child { background-color: #960018 !important; color: white !important; font-weight: bold; }
-</style>
-""", unsafe_allow_html=True)
+    def carregar_bases(self):
+        try:
+            with open(os.path.join(self.base_path, "base_temas_subtemas.json"), 'r', encoding='utf-8') as f:
+                self.temas_subtemas = json.load(f)
+            with open(os.path.join(self.base_path, "base_promotorias.json"), 'r', encoding='utf-8') as f:
+                self.base_promotorias = json.load(f)
+            
+            self.municipio_para_promotoria = {}
+            for nucleo, d in self.base_promotorias.items():
+                for m in d["municipios"]:
+                    self.municipio_para_promotoria[m.upper()] = {
+                        "promotoria": d["promotoria"], 
+                        "municipio_oficial": m
+                    }
+        except Exception as e:
+            st.error(f"Erro bases JSON: {e}")
 
-if "resultado" not in st.session_state:
-    st.session_state.resultado = None
+    def remover_acentos(self, texto: str) -> str:
+        if not texto: return ""
+        return "".join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
 
-# Inicialização do Classificador
-try:
-    classificador = ClassificadorDenuncias()
-except Exception as e:
-    st.error(f"Erro ao iniciar sistema: {e}")
-    st.stop()
+    def processar_denuncia(self, endereco, denuncia, num_com, num_mprj, vencedor, responsavel):
+        # 1. Identificar Município
+        municipio_nome = "Não identificado"
+        promotoria = "Não identificada"
+        end_upper = self.remover_acentos(endereco.upper())
+        
+        for m_chave, info in self.municipio_para_promotoria.items():
+            if self.remover_acentos(m_chave) in end_upper:
+                municipio_nome = info["municipio_oficial"]
+                promotoria = info["promotoria"]
+                break
 
-st.sidebar.image("https://www.mprj.mp.br/mprj-theme/images/mprj/logo_mprj.png", width=180)
-st.title("⚖️ Sistema Automático de Registro de Ouvidorias (SARO)")
-st.markdown("*Versão 2.0* | Registro e Gestão de Ouvidorias com auxílio de Inteligência Artificial")
-st.divider()
+        # 2. IA - Prompt Rígido para evitar erro C
+        catalogo = json.dumps(self.temas_subtemas, ensure_ascii=False)
+        prompt = (f"Analise: {denuncia}. Use este catálogo: {catalogo}. "
+                  "Responda APENAS um objeto JSON com: tema, subtema, empresa, resumo (máx 10 palavras).")
+        
+        try:
+            # Força o Gemini a responder JSON puro
+            res = self.model.generate_content(
+                prompt, 
+                generation_config={"response_mime_type": "application/json"}
+            )
+            dados_ia = json.loads(res.text)
+        except Exception as e:
+            # Fallback caso a IA falhe
+            dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "Não identificada", "resumo": "Processamento manual."}
 
-# --- FORMULÁRIO DE REGISTRO ---
-with st.form("form_reg", clear_on_submit=True):
-    st.markdown('<p class="titulo-custom">📝 Novo Registro de Ouvidoria</p>', unsafe_allow_html=True)
-    
-    col1, col2 = st.columns(2)
-    num_com = col1.text_input("Nº de Comunicação")
-    num_mprj = col2.text_input("Nº MPRJ")
-    
-    endereco = st.text_input("Endereço Completo")
-    denuncia = st.text_area("Descrição da Ouvidoria", height=150)
-    
-    f1, f2 = st.columns(2)
-    responsavel = f1.radio("Responsável:", ["Elias", "Matheus", "Ana Beatriz", "Sônia", "Priscila"], horizontal=True)
-    vencedor = f2.radio("Consumidor vencedor?", ["Sim", "Não"], horizontal=True)
-    
-    if st.form_submit_button("🔍 Registrar Ouvidoria", use_container_width=True):
-        if endereco and denuncia:
-            with st.spinner("Processando e Enviando..."):
-                # Captura o retorno (Dicionário de dados)
-                res = classificador.processar_denuncia(endereco, denuncia, num_com, num_mprj, vencedor, responsavel)
-                st.session_state.resultado = res
-                st.success("✅ Enviado para o Arquivo de Ouvidorias!")
-        else:
-            st.error("Preencha Endereço e Descrição.")
+        # 3. Formatação dos Dados
+        dados_final = {
+            "num_com": str(num_com),
+            "num_mprj": str(num_mprj),
+            "promotoria": promotoria,
+            "municipio": municipio_nome,
+            "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
+            "denuncia": denuncia,
+            "resumo": dados_ia.get("resumo", "Sem resumo"),
+            "tema": dados_ia.get("tema", "Outros"),
+            "subtema": dados_ia.get("subtema", "Geral"),
+            "empresa": str(dados_ia.get("empresa", "N/D")).title(),
+            "vencedor": vencedor,
+            "responsavel": responsavel
+        }
 
-# --- EXIBIÇÃO DO RESULTADO ATUAL ---
-if st.session_state.resultado:
-    res = st.session_state.resultado
-    st.divider()
-    st.markdown("### ✅ Resultado da Classificação Atual")
-    
-    # Box com informações principais (usando .get para evitar erros se a chave faltar)
-    st.markdown(f"""
-    <div class="caixa-resultado">
-        <div style="display: flex; justify-content: space-between;">
-            <p><span class="label-vermelho">Nº Comunicação:</span> {res.get('num_com', 'N/A')}</p>
-            <p><span class="label-vermelho">Nº MPRJ:</span> {res.get('num_mprj', 'N/A')}</p>
-        </div>
-        <p>📍 <span class="label-vermelho">Município:</span> {res.get('municipio', 'Não identificado')}</p>
-        <p>🏛️ <span class="label-vermelho">Promotoria Responsável:</span> {res.get('promotoria', 'Não identificada')}</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Badges de Tema, Subtema e Empresa
-    col_t1, col_t2, col_t3 = st.columns(3)
-    col_t1.markdown(f'<div class="badge-verde">Tema: {res.get("tema", "Outros")}</div>', unsafe_allow_html=True)
-    col_t2.markdown(f'<div class="badge-verde">Subtema: {res.get("subtema", "Geral")}</div>', unsafe_allow_html=True)
-    col_t3.markdown(f'<div class="badge-verde">Empresa: {res.get("empresa", "N/D")}</div>', unsafe_allow_html=True)
-    
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("**Resumo da IA (Com Localização):**")
-    st.markdown(f'<div class="resumo-box">{res.get("resumo", "Sem resumo disponível.")}</div>', unsafe_allow_html=True)
-    
-    # Expander com a descrição original
-    with st.expander("📄 Ver Descrição da Ouvidoria"):
-        st.write(res.get('denuncia', 'Sem descrição.'))
-    
-    if st.button("Limpar Tela para Novo Registro"):
-        st.session_state.resultado = None
-        st.rerun()
-
-st.divider()
-
-# --- TÓPICO: REGISTRO DE OUVIDORIAS (LINK DOS SECRETS) ---
-st.markdown('<p class="titulo-custom">📊 Registro de Ouvidorias</p>', unsafe_allow_html=True)
-
-# Busca o link da planilha diretamente dos Secrets para maior segurança
-url_planilha = st.secrets.get("URL_PLANILHA", "https://docs.google.com/spreadsheets/d/1RqvTGIawKh9Kdj8e-9BFPpi33xkNeA33ItKAaUC40xc/edit")
-
-st.markdown(f"""
-<div class="area-planilha">
-    <p>Acesse a planilha oficial atualizada em tempo real:</p>
-    <a href="{url_planilha}" target="_blank" style="font-weight: bold; color: #960018; font-size: 1.2rem;">
-        📂 Abrir Planilha de Ouvidorias
-    </a>
-</div>
-""", unsafe_allow_html=True)
-
-st.divider()
-st.caption("SARO v2.0 - Sistema Automático de Registro de Ouvidorias | Ministério Público do Rio de Janeiro")
+        # 4. Envio para Planilha (Webhook)
+        if self.webhook_url:
+            try:
+                # Timeout curto para não travar o usuário
+                requests.post(self.webhook_url, json=dados_final, timeout=10)
+            except:
+                st.warning("IA funcionou, mas a planilha está lenta. O registro será processado em breve.")
+        
+        return dados_final
