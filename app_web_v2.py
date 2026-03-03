@@ -35,6 +35,7 @@ st.markdown("""
 if "resultado" not in st.session_state:
     st.session_state.resultado = None
 
+# Inicialização do Classificador
 try:
     classificador = ClassificadorDenuncias()
 except Exception as e:
@@ -61,46 +62,47 @@ with st.form("form_reg", clear_on_submit=True):
     responsavel = f1.radio("Responsável:", ["Elias", "Matheus", "Ana Beatriz", "Sônia", "Priscila"], horizontal=True)
     vencedor = f2.radio("Consumidor vencedor?", ["Sim", "Não"], horizontal=True)
     
-    if st.form_submit_button("🔍Registrar Ouvidoria", use_container_width=True):
+    if st.form_submit_button("🔍 Registrar Ouvidoria", use_container_width=True):
         if endereco and denuncia:
-            with st.spinner("Processando..."):
+            with st.spinner("Processando e Enviando..."):
+                # Captura o retorno (Dicionário de dados)
                 res = classificador.processar_denuncia(endereco, denuncia, num_com, num_mprj, vencedor, responsavel)
                 st.session_state.resultado = res
                 st.success("✅ Enviado para o Arquivo de Ouvidorias!")
         else:
             st.error("Preencha Endereço e Descrição.")
 
-# --- TÓPICO: REGISTRO DA CLASSIFICAÇÃO ATUAL (VERSÃO ANTERIOR) ---
+# --- EXIBIÇÃO DO RESULTADO ATUAL ---
 if st.session_state.resultado:
     res = st.session_state.resultado
     st.divider()
     st.markdown("### ✅ Resultado da Classificação Atual")
     
-    # Box com informações principais
+    # Box com informações principais (usando .get para evitar erros se a chave faltar)
     st.markdown(f"""
     <div class="caixa-resultado">
         <div style="display: flex; justify-content: space-between;">
-            <p><span class="label-vermelho">Nº Comunicação:</span> {res['num_com']}</p>
-            <p><span class="label-vermelho">Nº MPRJ:</span> {res['num_mprj']}</p>
+            <p><span class="label-vermelho">Nº Comunicação:</span> {res.get('num_com', 'N/A')}</p>
+            <p><span class="label-vermelho">Nº MPRJ:</span> {res.get('num_mprj', 'N/A')}</p>
         </div>
-        <p>📍 <span class="label-vermelho">Município:</span> {res['municipio']}</p>
-        <p>🏛️ <span class="label-vermelho">Promotoria Responsável:</span> {res['promotoria']}</p>
+        <p>📍 <span class="label-vermelho">Município:</span> {res.get('municipio', 'Não identificado')}</p>
+        <p>🏛️ <span class="label-vermelho">Promotoria Responsável:</span> {res.get('promotoria', 'Não identificada')}</p>
     </div>
     """, unsafe_allow_html=True)
     
     # Badges de Tema, Subtema e Empresa
     col_t1, col_t2, col_t3 = st.columns(3)
-    col_t1.markdown(f'<div class="badge-verde">Tema: {res["tema"]}</div>', unsafe_allow_html=True)
-    col_t2.markdown(f'<div class="badge-verde">Subtema: {res["subtema"]}</div>', unsafe_allow_html=True)
-    col_t3.markdown(f'<div class="badge-verde">Empresa: {res["empresa"]}</div>', unsafe_allow_html=True)
+    col_t1.markdown(f'<div class="badge-verde">Tema: {res.get("tema", "Outros")}</div>', unsafe_allow_html=True)
+    col_t2.markdown(f'<div class="badge-verde">Subtema: {res.get("subtema", "Geral")}</div>', unsafe_allow_html=True)
+    col_t3.markdown(f'<div class="badge-verde">Empresa: {res.get("empresa", "N/D")}</div>', unsafe_allow_html=True)
     
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("**Resumo da IA (Máximo 10 palavras):**")
-    st.markdown(f'<div class="resumo-box">{res["resumo"]}</div>', unsafe_allow_html=True)
+    st.markdown("**Resumo da IA (Com Localização):**")
+    st.markdown(f'<div class="resumo-box">{res.get("resumo", "Sem resumo disponível.")}</div>', unsafe_allow_html=True)
     
     # Expander com a descrição original
     with st.expander("📄 Ver Descrição da Ouvidoria"):
-        st.write(res['denuncia'])
+        st.write(res.get('denuncia', 'Sem descrição.'))
     
     if st.button("Limpar Tela para Novo Registro"):
         st.session_state.resultado = None
@@ -108,9 +110,11 @@ if st.session_state.resultado:
 
 st.divider()
 
-# --- TÓPICO: REGISTRO DE OUVIDORIAS (LINK) ---
+# --- TÓPICO: REGISTRO DE OUVIDORIAS (LINK DOS SECRETS) ---
 st.markdown('<p class="titulo-custom">📊 Registro de Ouvidorias</p>', unsafe_allow_html=True)
-url_planilha = "https://docs.google.com/spreadsheets/d/1RqvTGIawKh9Kdj8e-9BFPpi33xkNeA33ItKAaUC40xc/edit"
+
+# Busca o link da planilha diretamente dos Secrets para maior segurança
+url_planilha = st.secrets.get("URL_PLANILHA", "https://docs.google.com/spreadsheets/d/1RqvTGIawKh9Kdj8e-9BFPpi33xkNeA33ItKAaUC40xc/edit")
 
 st.markdown(f"""
 <div class="area-planilha">
@@ -122,5 +126,4 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 st.divider()
-
-st.caption("SARO v2.0 - Sistema Automático de Registro de Ouvidorias | Ministério Público do Rio de Janeiro (Created by Matheus Pereira Barreto [62006659])")
+st.caption("SARO v2.0 - Sistema Automático de Registro de Ouvidorias | Ministério Público do Rio de Janeiro")
