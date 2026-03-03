@@ -1,98 +1,57 @@
 # -*- coding: utf-8 -*-
-import json
-import requests
-import os
-import unicodedata
 import streamlit as st
-import google.generativeai as genai
-from datetime import datetime
+from classificador_denuncias import ClassificadorDenuncias
 
-class ClassificadorDenuncias:
-    def __init__(self):
-        try:
-            # Puxa a chave dos Secrets
-            api_key = st.secrets["GOOGLE_API_KEY"]
-            genai.configure(api_key=api_key)
-            # Usando a versão mais estável do flash
-            self.model = genai.GenerativeModel('gemini-1.5-flash')
-        except Exception as e:
-            st.error(f"Erro na Chave da IA: {e}")
-        
-        self.webhook_url = st.secrets.get("GSHEET_WEBHOOK")
-        self.base_path = os.path.dirname(os.path.abspath(__file__))
-        self.carregar_bases()
+st.set_page_config(page_title="SARO - MPRJ", layout="wide", page_icon="⚖️")
 
-    def carregar_bases(self):
-        try:
-            with open(os.path.join(self.base_path, "base_temas_subtemas.json"), 'r', encoding='utf-8') as f:
-                self.temas_subtemas = json.load(f)
-            with open(os.path.join(self.base_path, "base_promotorias.json"), 'r', encoding='utf-8') as f:
-                self.base_promotorias = json.load(f)
-            
-            self.municipio_para_promotoria = {}
-            for nucleo, d in self.base_promotorias.items():
-                for m in d["municipios"]:
-                    self.municipio_para_promotoria[m.upper()] = {
-                        "promotoria": d["promotoria"], 
-                        "municipio_oficial": m
-                    }
-        except Exception as e:
-            st.error(f"Erro bases JSON: {e}")
+# CSS para o visual do MPRJ
+st.markdown("""
+<style>
+    .caixa-resultado { border: 1px solid #960018; padding: 20px; border-radius: 10px; background-color: #ffffff; margin-bottom: 20px; }
+    .label-vermelho { color: #960018; font-weight: bold; }
+    .titulo-custom { color: #960018; font-weight: bold; font-size: 1.5rem; }
+    div.stButton > button:first-child { background-color: #960018 !important; color: white !important; width: 100%; }
+</style>
+""", unsafe_allow_html=True)
 
-    def remover_acentos(self, texto: str) -> str:
-        if not texto: return ""
-        return "".join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
+# Inicia o motor do sistema
+if "classificador" not in st.session_state:
+    try:
+        st.session_state.classificador = ClassificadorDenuncias()
+    except Exception as e:
+        st.error(f"Erro ao carregar o motor do sistema: {e}")
 
-    def processar_denuncia(self, endereco, denuncia, num_com, num_mprj, vencedor, responsavel):
-        # 1. Identificar Município
-        municipio_nome = "Não identificado"
-        promotoria = "Não identificada"
-        end_upper = self.remover_acentos(endereco.upper())
-        
-        for m_chave, info in self.municipio_para_promotoria.items():
-            if self.remover_acentos(m_chave) in end_upper:
-                municipio_nome = info["municipio_oficial"]
-                promotoria = info["promotoria"]
-                break
+st.title("⚖️ Sistema SARO - MPRJ")
+st.markdown("*Versão 2.0* | Inteligência Artificial")
 
-        # 2. IA - Prompt Rígido para evitar erro C
-        catalogo = json.dumps(self.temas_subtemas, ensure_ascii=False)
-        prompt = (f"Analise: {denuncia}. Use este catálogo: {catalogo}. "
-                  "Responda APENAS um objeto JSON com: tema, subtema, empresa, resumo (máx 10 palavras).")
-        
-        try:
-            # Força o Gemini a responder JSON puro
-            res = self.model.generate_content(
-                prompt, 
-                generation_config={"response_mime_type": "application/json"}
-            )
-            dados_ia = json.loads(res.text)
-        except Exception as e:
-            # Fallback caso a IA falhe
-            dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "Não identificada", "resumo": "Processamento manual."}
+# Formulário
+with st.form("registro", clear_on_submit=True):
+    col1, col2 = st.columns(2)
+    n_com = col1.text_input("Nº Comunicação")
+    n_mprj = col2.text_input("Nº MPRJ")
+    end = st.text_input("Endereço Completo")
+    den = st.text_area("Descrição da Denúncia", height=150)
+    
+    f1, f2 = st.columns(2)
+    resp = f1.radio("Responsável", ["Elias", "Matheus", "Ana Beatriz", "Sônia", "Priscila"], horizontal=True)
+    venc = f2.radio("Vencedor?", ["Sim", "Não"], horizontal=True)
+    
+    if st.form_submit_button("🔍 REGISTRAR AGORA"):
+        if end and den:
+            with st.spinner("IA Processando..."):
+                resultado = st.session_state.classificador.processar_denuncia(end, den, n_com, n_mprj, venc, resp)
+                st.session_state.ultimo_res = resultado
+                st.success("✅ Registrado com sucesso!")
+        else:
+            st.error("Preencha Endereço e Denúncia.")
 
-        # 3. Formatação dos Dados
-        dados_final = {
-            "num_com": str(num_com),
-            "num_mprj": str(num_mprj),
-            "promotoria": promotoria,
-            "municipio": municipio_nome,
-            "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
-            "denuncia": denuncia,
-            "resumo": dados_ia.get("resumo", "Sem resumo"),
-            "tema": dados_ia.get("tema", "Outros"),
-            "subtema": dados_ia.get("subtema", "Geral"),
-            "empresa": str(dados_ia.get("empresa", "N/D")).title(),
-            "vencedor": vencedor,
-            "responsavel": responsavel
-        }
-
-        # 4. Envio para Planilha (Webhook)
-        if self.webhook_url:
-            try:
-                # Timeout curto para não travar o usuário
-                requests.post(self.webhook_url, json=dados_final, timeout=10)
-            except:
-                st.warning("IA funcionou, mas a planilha está lenta. O registro será processado em breve.")
-        
-        return dados_final
+# Exibe o resultado se existir
+if "ultimo_res" in st.session_state:
+    res = st.session_state.ultimo_res
+    st.markdown(f"""
+    <div class="caixa-resultado">
+        <p><span class="label-vermelho">MUNICÍPIO:</span> {res['municipio']}</p>
+        <p><span class="label-vermelho">TEMA:</span> {res['tema']} | <span class="label-vermelho">SUBTEMA:</span> {res['subtema']}</p>
+        <p><span class="label-vermelho">RESUMO:</span> {res['resumo']}</p>
+    </div>
+    """, unsafe_allow_html=True)
