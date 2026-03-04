@@ -10,15 +10,15 @@ from datetime import datetime
 class ClassificadorDenuncias:
     def __init__(self):
         try:
-            # Puxa a chave dos Secrets
             if "GOOGLE_API_KEY" in st.secrets:
+                # Configuração simplificada para evitar erro de versão v1beta
                 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-                # CORREÇÃO AQUI: Usando a versão estável e mais recente
-                self.model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                # Usamos o nome base do modelo que é o mais compatível
+                self.model = genai.GenerativeModel('gemini-1.5-flash')
             else:
-                st.error("Chave GOOGLE_API_KEY não encontrada nos Secrets.")
+                st.error("ERRO: GOOGLE_API_KEY não encontrada nos Secrets.")
         except Exception as e:
-            st.error(f"Erro ao configurar IA: {e}")
+            st.error(f"Erro na configuração da IA: {e}")
         
         self.webhook_url = st.secrets.get("GSHEET_WEBHOOK", "")
         self.base_path = os.path.dirname(os.path.abspath(__file__))
@@ -26,12 +26,9 @@ class ClassificadorDenuncias:
 
     def carregar_bases(self):
         try:
-            path_temas = os.path.join(self.base_path, "base_temas_subtemas.json")
-            path_prom = os.path.join(self.base_path, "base_promotorias.json")
-            
-            with open(path_temas, 'r', encoding='utf-8') as f:
+            with open(os.path.join(self.base_path, "base_temas_subtemas.json"), 'r', encoding='utf-8') as f:
                 self.temas_subtemas = json.load(f)
-            with open(path_prom, 'r', encoding='utf-8') as f:
+            with open(os.path.join(self.base_path, "base_promotorias.json"), 'r', encoding='utf-8') as f:
                 self.base_promotorias = json.load(f)
             
             self.municipio_para_promotoria = {}
@@ -42,7 +39,7 @@ class ClassificadorDenuncias:
                         "municipio_oficial": m
                     }
         except Exception as e:
-            st.error(f"Erro ao ler arquivos JSON: {e}")
+            st.error(f"Erro ao carregar arquivos JSON: {e}")
 
     def remover_acentos(self, texto: str) -> str:
         if not texto: return ""
@@ -59,42 +56,31 @@ class ClassificadorDenuncias:
                 promotoria = info["promotoria"]
                 break
 
-        # IA Config
         try:
             catalogo = json.dumps(self.temas_subtemas, ensure_ascii=False)
-            prompt = (f"Analise a denúncia: {denuncia}. Use este catálogo: {catalogo}. "
-                      "Retorne EXCLUSIVAMENTE um JSON com as chaves: tema, subtema, empresa, resumo.")
+            prompt = (f"Analise: {denuncia}. Catálogo: {catalogo}. "
+                      "Retorne APENAS um JSON com chaves: tema, subtema, empresa, resumo.")
             
+            # Chamada otimizada para JSON
             res = self.model.generate_content(
                 prompt, 
                 generation_config={"response_mime_type": "application/json"}
             )
-            
-            # Limpeza de segurança na resposta
-            texto_ia = res.text.strip()
-            dados_ia = json.loads(texto_ia)
-            
+            dados_ia = json.loads(res.text)
         except Exception as e:
-            st.error(f"Erro na IA (Verifique a API Key): {e}")
-            dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "N/D", "resumo": "Processamento manual."}
+            st.error(f"Erro na resposta da IA: {e}")
+            dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "N/D", "resumo": "Erro na classificação."}
 
-        # Montagem dos dados
         dados_final = {
-            "num_com": str(num_com),
-            "num_mprj": str(num_mprj),
-            "promotoria": promotoria,
-            "municipio": municipio_nome,
+            "num_com": str(num_com), "num_mprj": str(num_mprj),
+            "promotoria": promotoria, "municipio": municipio_nome,
             "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
-            "denuncia": denuncia,
-            "resumo": dados_ia.get("resumo", "Sem resumo"),
-            "tema": dados_ia.get("tema", "Outros"),
-            "subtema": dados_ia.get("subtema", "Geral"),
-            "empresa": str(dados_ia.get("empresa", "N/D")).title(),
-            "vencedor": vencedor,
-            "responsavel": responsavel
+            "denuncia": denuncia, "resumo": dados_ia.get("resumo"),
+            "tema": dados_ia.get("tema"), "subtema": dados_ia.get("subtema"),
+            "empresa": str(dados_ia.get("empresa")).title(),
+            "vencedor": vencedor, "responsavel": responsavel
         }
 
-        # Envio para Planilha
         if self.webhook_url:
             try:
                 requests.post(self.webhook_url, json=dados_final, timeout=10)
