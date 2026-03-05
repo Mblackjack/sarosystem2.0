@@ -21,7 +21,7 @@ class ClassificadorDenuncias:
         try:
             genai.configure(api_key=api_key)
             # Usando nome estável para evitar erro 404/v1beta
-            self.model = genai.GenerativeModel('gemini-1.5-flash')
+            self.model = genai.GenerativeModel('gemini-1.5-flash-latest')
         except Exception as e:
             st.error(f"Erro ao configurar o modelo Gemini: {e}")
 
