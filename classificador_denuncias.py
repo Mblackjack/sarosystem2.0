@@ -10,17 +10,20 @@ from datetime import datetime
 class ClassificadorDenuncias:
     def __init__(self):
         try:
-            if "GOOGLE_API_KEY" in st.secrets:
-                # Configuração simplificada para evitar erro de versão v1beta
-                genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-                # Usamos o nome base do modelo que é o mais compatível
+            # Busca chave no Render (os.environ) ou Streamlit (st.secrets)
+            api_key = os.environ.get("GOOGLE_API_KEY") or st.secrets.get("GOOGLE_API_KEY")
+            
+            if api_key:
+                genai.configure(api_key=api_key)
+                # Forçamos a versão estável para evitar erro 404
                 self.model = genai.GenerativeModel('gemini-1.5-flash')
             else:
-                st.error("ERRO: GOOGLE_API_KEY não encontrada nos Secrets.")
+                st.error("ERRO: Variável GOOGLE_API_KEY não encontrada.")
         except Exception as e:
             st.error(f"Erro na configuração da IA: {e}")
         
-        self.webhook_url = st.secrets.get("GSHEET_WEBHOOK", "")
+        # Webhook para a planilha
+        self.webhook_url = os.environ.get("GSHEET_WEBHOOK") or st.secrets.get("GSHEET_WEBHOOK", "")
         self.base_path = os.path.dirname(os.path.abspath(__file__))
         self.carregar_bases()
 
@@ -61,15 +64,14 @@ class ClassificadorDenuncias:
             prompt = (f"Analise: {denuncia}. Catálogo: {catalogo}. "
                       "Retorne APENAS um JSON com chaves: tema, subtema, empresa, resumo.")
             
-            # Chamada otimizada para JSON
             res = self.model.generate_content(
                 prompt, 
                 generation_config={"response_mime_type": "application/json"}
             )
             dados_ia = json.loads(res.text)
         except Exception as e:
-            st.error(f"Erro na resposta da IA: {e}")
-            dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "N/D", "resumo": "Erro na classificação."}
+            st.error(f"Erro na IA: {e}")
+            dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "N/D", "resumo": "Erro na IA."}
 
         dados_final = {
             "num_com": str(num_com), "num_mprj": str(num_mprj),
@@ -85,6 +87,6 @@ class ClassificadorDenuncias:
             try:
                 requests.post(self.webhook_url, json=dados_final, timeout=10)
             except:
-                pass
+                st.warning("IA funcionou, mas houve falha ao enviar para a planilha.")
         
         return dados_final
