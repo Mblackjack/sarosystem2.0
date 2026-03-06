@@ -7,24 +7,40 @@ import streamlit as st
 import google.generativeai as genai
 from datetime import datetime
 
+# FORÇA A BIBLIOTECA A USAR O ENDPOINT ESTÁVEL (Mata o erro 404 v1beta)
+os.environ["GOOGLE_API_USE_MTLS_ENDPOINT"] = "never"
+
 class ClassificadorDenuncias:
     def __init__(self):
-        # BUSCA DE CHAVES: Prioriza o Render (os.environ), depois tenta Streamlit
+        # 1. BUSCA DE CHAVES: Prioridade total ao ambiente do Render (os.environ)
+        # Usamos .get() para evitar que o código trave se a chave não existir
         api_key = os.environ.get("GOOGLE_API_KEY")
+        
+        # Só tenta o secrets se não estiver no Render (ambiente local)
         if not api_key:
             try:
-                api_key = st.secrets["GOOGLE_API_KEY"]
+                api_key = st.secrets.get("GOOGLE_API_KEY")
             except:
                 api_key = None
 
         if api_key:
-            genai.configure(api_key=api_key)
-            # MUDANÇA PARA O MODELO PRO: Mais estável contra erros de versão v1beta
-            self.model = genai.GenerativeModel('gemini-1.5-pro')
+            try:
+                genai.configure(api_key=api_key)
+                # Usando o modelo Pro que é o mais resiliente a mudanças de API
+                self.model = genai.GenerativeModel('gemini-1.5-pro')
+            except Exception as e:
+                st.error(f"Erro ao configurar Google AI: {e}")
         else:
-            st.error("ERRO: Chave GOOGLE_API_KEY não configurada no Render.")
+            st.error("ERRO: GOOGLE_API_KEY não encontrada. Verifique a aba Environment no Render.")
 
-        self.webhook_url = os.environ.get("GSHEET_WEBHOOK") or st.secrets.get("GSHEET_WEBHOOK", "")
+        # Webhook da Planilha
+        self.webhook_url = os.environ.get("GSHEET_WEBHOOK")
+        if not self.webhook_url:
+            try:
+                self.webhook_url = st.secrets.get("GSHEET_WEBHOOK", "")
+            except:
+                self.webhook_url = ""
+
         self.base_path = os.path.dirname(os.path.abspath(__file__))
         self.carregar_bases()
 
@@ -43,7 +59,7 @@ class ClassificadorDenuncias:
                         "municipio_oficial": m
                     }
         except Exception as e:
-            st.error(f"Erro nos arquivos JSON: {e}")
+            st.error(f"Erro crítico ao carregar bases JSON: {e}")
 
     def remover_acentos(self, texto: str) -> str:
         if not texto: return ""
@@ -65,30 +81,40 @@ class ClassificadorDenuncias:
             prompt = (f"Analise: {denuncia}. Catálogo: {catalogo}. "
                       "Retorne APENAS um JSON com chaves: tema, subtema, empresa, resumo.")
             
-            # Forçamos a resposta em JSON estável
+            # Geração com configuração de JSON estrito
             res = self.model.generate_content(
                 prompt,
                 generation_config={"response_mime_type": "application/json"}
             )
             dados_ia = json.loads(res.text)
         except Exception as e:
-            st.error(f"Falha na IA: {e}")
-            dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "N/D", "resumo": "Processamento manual."}
+            # Em caso de erro, não para o app, define valores padrão
+            dados_ia = {
+                "tema": "Outros", 
+                "subtema": "Geral", 
+                "empresa": "N/D", 
+                "resumo": "Processamento manual (Erro na IA)."
+            }
 
         dados_final = {
-            "num_com": str(num_com), "num_mprj": str(num_mprj),
-            "promotoria": promotoria, "municipio": municipio_nome,
+            "num_com": str(num_com), 
+            "num_mprj": str(num_mprj),
+            "promotoria": promotoria, 
+            "municipio": municipio_nome,
             "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
-            "denuncia": denuncia, "resumo": dados_ia.get("resumo"),
-            "tema": dados_ia.get("tema"), "subtema": dados_ia.get("subtema"),
+            "denuncia": denuncia, 
+            "resumo": dados_ia.get("resumo"),
+            "tema": dados_ia.get("tema"), 
+            "subtema": dados_ia.get("subtema"),
             "empresa": str(dados_ia.get("empresa")).title(),
-            "vencedor": vencedor, "responsavel": responsavel
+            "vencedor": vencedor, 
+            "responsavel": responsavel
         }
 
         if self.webhook_url:
             try:
                 requests.post(self.webhook_url, json=dados_final, timeout=10)
             except:
-                pass
+                pass # Silencia erros de envio para não travar a interface
         
         return dados_final
