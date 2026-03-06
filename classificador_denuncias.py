@@ -7,34 +7,23 @@ import streamlit as st
 import google.generativeai as genai
 from datetime import datetime
 
-# ESTA LINHA É O SEGREDO: Força o uso da API estável e mata o erro 404 v1beta
+# Força o uso da API estável
 os.environ["GOOGLE_API_USE_MTLS_ENDPOINT"] = "never"
 
 class ClassificadorDenuncias:
     def __init__(self):
-        # 1. BUSCA DE CHAVES: Prioridade total ao Render (os.environ)
-        api_key = os.environ.get("GOOGLE_API_KEY")
+        # 1. BUSCA DE CHAVES
+        api_key = os.environ.get("GOOGLE_API_KEY") or st.secrets.get("GOOGLE_API_KEY")
         
-        # Se não estiver no Render, tenta Streamlit Secrets
-        if not api_key:
-            try:
-                api_key = st.secrets["GOOGLE_API_KEY"]
-            except:
-                api_key = None
-
         if api_key:
             try:
-                # Configuração explícita da versão estável
                 genai.configure(api_key=api_key)
-                
-                # Vamos usar o 1.5-flash que é o mais rápido para esse tipo de tarefa
-                self.model = genai.GenerativeModel(
-                    model_name='gemini-1.5-flash'
-                )
+                # Mudamos para o Pro que é mais estável para evitar o erro 404 v1beta
+                self.model = genai.GenerativeModel('gemini-1.5-pro')
             except Exception as e:
                 st.error(f"Erro ao configurar Google AI: {e}")
         else:
-            st.error("ERRO: GOOGLE_API_KEY não encontrada no painel Environment do Render.")
+            st.error("ERRO: GOOGLE_API_KEY não encontrada no Render (aba Environment).")
 
         self.webhook_url = os.environ.get("GSHEET_WEBHOOK") or st.secrets.get("GSHEET_WEBHOOK", "")
         self.base_path = os.path.dirname(os.path.abspath(__file__))
@@ -78,29 +67,37 @@ class ClassificadorDenuncias:
                   "Retorne APENAS um JSON com chaves: tema, subtema, empresa, resumo.")
         
         try:
-            # ADICIONAMOS O MODO JSON EXPLÍCITO AQUI TAMBÉM
             res = self.model.generate_content(
                 prompt,
                 generation_config={"response_mime_type": "application/json"}
             )
-            dados_ia = json.loads(res.text)
+            
+            # Limpeza de segurança caso a IA envie markdown ```json
+            limpo = res.text.replace('```json', '').replace('```', '').strip()
+            dados_ia = json.loads(limpo)
+            
         except Exception as e:
-            # Se a IA falhar por 404, o sistema usa esses valores padrão abaixo
+            st.warning(f"IA indisponível no momento. Detalhe: {e}")
             dados_ia = {
                 "tema": "Outros", 
                 "subtema": "Geral", 
                 "empresa": "N/D", 
-                "resumo": f"Erro técnico na IA: {str(e)[:50]}..."
+                "resumo": "Processamento manual necessário."
             }
 
         dados_final = {
-            "num_com": str(num_com), "num_mprj": str(num_mprj),
-            "promotoria": promotoria, "municipio": municipio_nome,
+            "num_com": str(num_com), 
+            "num_mprj": str(num_mprj),
+            "promotoria": promotoria, 
+            "municipio": municipio_nome,
             "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
-            "denuncia": denuncia, "resumo": dados_ia.get("resumo"),
-            "tema": dados_ia.get("tema"), "subtema": dados_ia.get("subtema"),
-            "empresa": str(dados_ia.get("empresa")).title(),
-            "vencedor": vencedor, "responsavel": responsavel
+            "denuncia": denuncia, 
+            "resumo": dados_ia.get("resumo"),
+            "tema": dados_ia.get("tema"), 
+            "subtema": dados_ia.get("subtema"),
+            "empresa": str(dados_ia.get("empresa", "N/D")).title(),
+            "vencedor": vencedor, 
+            "responsavel": responsavel
         }
 
         if self.webhook_url:
