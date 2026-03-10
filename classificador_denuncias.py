@@ -51,9 +51,18 @@ class ClassificadorDenuncias:
                 municipio_nome, promotoria = info["municipio_oficial"], info["promotoria"]
                 break
 
-        # CHAMADA MISTRAL
+        # CHAMADA MISTRAL - CONFIGURAÇÃO DO PROMPT COM REGRAS DE BAIRRO E LIMITE
         catalogo = json.dumps(self.temas_subtemas, ensure_ascii=False)
-        prompt = f"Analise: {denuncia}. Catálogo: {catalogo}. Responda APENAS um JSON (chaves: tema, subtema, empresa, resumo)."
+        
+        prompt = (
+            f"Endereço: {endereco}\n"
+            f"Relato: {denuncia}\n\n"
+            f"Catálogo: {catalogo}\n\n"
+            "Retorne APENAS um JSON (chaves: tema, subtema, empresa, resumo).\n"
+            "REGRAS PARA O CAMPO 'resumo':\n"
+            "1. Identifique o BAIRRO no endereço e comece o resumo por ele.\n"
+            "2. O resumo deve ter NO MÁXIMO 10 palavras no total."
+        )
 
         try:
             response = self.client.chat.complete(
@@ -63,17 +72,32 @@ class ClassificadorDenuncias:
             )
             dados_ia = json.loads(response.choices[0].message.content)
         except Exception as e:
-            dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "N/D", "resumo": "Processamento manual."}
+            dados_ia = {
+                "tema": "Outros", 
+                "subtema": "Geral", 
+                "empresa": "N/D", 
+                "resumo": "Processamento manual necessário."
+            }
 
         dados_final = {
-            "num_com": str(num_com), "num_mprj": str(num_mprj), "promotoria": promotoria,
-            "municipio": municipio_nome, "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
-            "denuncia": denuncia, "resumo": dados_ia.get("resumo"), "tema": dados_ia.get("tema"),
-            "subtema": dados_ia.get("subtema"), "empresa": str(dados_ia.get("empresa")).title(),
-            "vencedor": vencedor, "responsavel": responsavel
+            "num_com": str(num_com), 
+            "num_mprj": str(num_mprj), 
+            "promotoria": promotoria,
+            "municipio": municipio_nome, 
+            "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
+            "denuncia": denuncia, 
+            "resumo": dados_ia.get("resumo"), 
+            "tema": dados_ia.get("tema"),
+            "subtema": dados_ia.get("subtema"), 
+            "empresa": str(dados_ia.get("empresa")).title(),
+            "vencedor": vencedor, 
+            "responsavel": responsavel
         }
 
         if self.webhook_url:
-            requests.post(self.webhook_url, json=dados_final, timeout=10)
+            try:
+                requests.post(self.webhook_url, json=dados_final, timeout=10)
+            except:
+                pass
         
         return dados_final
