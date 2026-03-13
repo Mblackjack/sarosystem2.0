@@ -5,27 +5,25 @@ import os
 import unicodedata
 import streamlit as st
 from datetime import datetime
-
-# Importação segura da Mistral
-try:
-    from mistralai import Mistral
-except ImportError:
-    try:
-        from mistralai.client import MistralClient as Mistral
-    except ImportError:
-        st.error("Erro: Biblioteca mistralai não instalada.")
+import mistralai
+from mistralai import Mistral
 
 class ClassificadorDenuncias:
     def __init__(self):
         # 1. Configuração da API Key
         api_key = os.environ.get("MISTRAL_API_KEY") or st.secrets.get("MISTRAL_API_KEY", "")
+        
+        self.client = None
         if api_key:
             try:
+                # Inicialização direta
                 self.client = Mistral(api_key=api_key)
                 self.model = "mistral-small-latest"
             except Exception as e:
-                st.error(f"Erro Mistral: {e}")
-        
+                st.error(f"Erro ao conectar com Mistral: {e}")
+        else:
+            st.error("ERRO: MISTRAL_API_KEY não configurada.")
+
         self.webhook_url = os.environ.get("GSHEET_WEBHOOK") or st.secrets.get("GSHEET_WEBHOOK", "")
         self.base_path = os.path.dirname(os.path.abspath(__file__))
         self.carregar_bases()
@@ -45,14 +43,13 @@ class ClassificadorDenuncias:
                         "municipio_oficial": m
                     }
         except Exception as e:
-            st.error(f"Erro JSON: {e}")
+            st.error(f"Erro ao ler bases JSON: {e}")
 
     def remover_acentos(self, texto: str) -> str:
         if not texto: return ""
         return "".join(c for c in unicodedata.normalize('NFD', str(texto)) if unicodedata.category(c) != 'Mn')
 
     def processar_denuncia(self, endereco, denuncia, num_com, num_mprj, vencedor, responsavel):
-        # Lógica de identificação de Município e Promotoria (Linha 62 corrigida)
         municipio_nome = "Não identificado"
         promotoria = "Não identificada"
         end_upper = self.remover_acentos(endereco).upper()
@@ -71,17 +68,19 @@ class ClassificadorDenuncias:
             "Regras: 1. Inicie resumo pelo BAIRRO. 2. Máximo 10 palavras."
         )
 
-        try:
-            response = self.client.chat.complete(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"}
-            )
-            dados_ia = json.loads(response.choices[0].message.content)
-        except:
-            dados_ia = {"tema":"Outros","subtema":"Geral","empresa":"N/D","resumo":"Erro IA"}
+        dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "N/D", "resumo": "Erro IA"}
+        
+        if self.client:
+            try:
+                response = self.client.chat.complete(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    response_format={"type": "json_object"}
+                )
+                dados_ia = json.loads(response.choices[0].message.content)
+            except Exception as e:
+                dados_ia["resumo"] = f"Erro na chamada: {str(e)[:50]}"
 
-        # Dados para a planilha
         dados_final = {
             "num_com": str(num_com),
             "num_mprj": str(num_mprj),
