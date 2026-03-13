@@ -51,14 +51,19 @@ class ClassificadorDenuncias:
                 break
 
         catalogo = json.dumps(self.temas_subtemas, ensure_ascii=False)
+        
+        # PROMPT REFORMULADO
         prompt = (
             f"Endereço: {endereco}\nRelato: {denuncia}\n\nCatálogo: {catalogo}\n\n"
-            "Retorne APENAS JSON com as chaves: tema, subtema, empresa, bairro, resumo.\n"
-            "Regras: 1. No campo 'bairro', extraia apenas o nome do bairro do endereço.\n"
-            "2. No campo 'resumo', inicie pelo bairro e limite a 10 palavras."
+            "Retorne APENAS um JSON com as chaves: tema, subtema, empresa, bairro, resumo.\n"
+            "REGRAS ESTREITAS:\n"
+            "1. No campo 'bairro', extraia apenas o nome do bairro do endereço.\n"
+            "2. No campo 'resumo', escreva uma frase coesa SEM citar o bairro.\n"
+            "3. O resumo deve ter NO MÁXIMO 10 palavras.\n"
+            "4. O resumo DEVE começar com letra maiúscula e terminar com ponto final."
         )
 
-        dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "N/D", "bairro": "Não identificado", "resumo": "Erro IA"}
+        dados_ia = {"tema": "Outros", "subtema": "Geral", "empresa": "N/D", "bairro": "Não identificado", "resumo": "Erro no processamento da IA."}
         
         if self.client:
             try:
@@ -76,7 +81,7 @@ class ClassificadorDenuncias:
             "num_mprj": str(num_mprj),
             "promotoria": promotoria,
             "municipio": municipio_nome,
-            "bairro_ouvidoria": dados_ia.get("bairro", "Não identificado"), # NOVA CHAVE
+            "bairro_ouvidoria": dados_ia.get("bairro", "Não identificado"),
             "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
             "denuncia": denuncia,
             "resumo": dados_ia.get("resumo"),
