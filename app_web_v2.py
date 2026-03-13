@@ -97,7 +97,7 @@ if st.session_state.resultado:
     col_t3.markdown(f'<div class="badge-verde">Empresa: {res["empresa"]}</div>', unsafe_allow_html=True)
     
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("**Resumo da IA (Bairro + Máximo 10 palavras):**")
+    st.markdown("**Resumo Profissional (IA):**")
     st.markdown(f'<div class="resumo-box">{res["resumo"]}</div>', unsafe_allow_html=True)
     
     with st.expander("📄 Ver Descrição Original"):
